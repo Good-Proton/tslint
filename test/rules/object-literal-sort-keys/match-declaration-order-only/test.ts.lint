@@ -67,5 +67,62 @@ const o = {
     a,
 };
 
+// Works with interfaces extending other interfaces or types
+
+interface IExtends extends I {
+    ext0;
+    ext1;
+}
+
+declare function fex<T>(a: T): void;
+const ext0 = 0, ext1 = 1;
+
+// order of keys is checked for every group
+
+fex<IExtends>({ b, a, ext0, ext1 });
+fex<IExtends>({ ext0, ext1, b, a, });
+
+fex<IExtends>({ a, b, ext0, ext1 });
+                   ~ [0 % ('b', 'I')]
+fex<IExtends>({ b, a, ext1, ext0 });
+                      ~~~~ [0 % ('ext1', 'IExtends')]
+
+// and typeof operator derived types
+
+const o = { b, a };
+type O = typeof o;
+
+interface IExtendsTypeOf extends O {
+    ext0;
+    ext1;
+}
+
+fex<IExtendsTypeOf>({ b, a, ext0, ext1 });
+
+fex<IExtendsTypeOf>({ a, b, ext0, ext1 });
+                         ~ [0 % ('b', 'T')]
+fex<IExtendsTypeOf>({ b, a, ext1, ext0 });
+                            ~~~~ [0 % ('ext1', 'IExtendsTypeOf')]
+
+// works with union
+
+type IUnion = { un0; un1; un2?; un3; } | { un0; un1; un3?; un2; };
+
+interface IExtendsUnion extends IUnion {
+    ext0;
+    ext1;
+}
+
+const un0 = 0, un1 = 1; un2 = 2; un3 = 3;
+
+fex<IExtendsUnion>({ un0, un1, un2, un3, ext0, ext1 });
+fex<IExtendsUnion>({ un1, un0, un2, ext0, ext1 });
+fex<IExtendsUnion>({ ext0, ext1, un0, un1, un3, un2 });
+
+fex<IExtendsUnion>({ ext1, ext0, un0, un1, un2, un3 });
+                           ~~~~ [0 % ('ext0', 'IExtendsUnion')]
+fex<IExtendsUnion>({ ext1, un0, un1, un2, un3, ext0 });
+                                               ~~~~ [0 % ('ext0', 'IExtendsUnion')]
+
 [0]: The key '%s' is not in the same order as it is in '%s'.
 [1]: The key '%s' is not in the same order as it is in its type declaration.

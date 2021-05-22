@@ -17,6 +17,7 @@
 
 import {
     isInterfaceDeclaration,
+    isInterfaceType,
     isObjectLiteralExpression,
     isSameLine,
     isTypeAliasDeclaration,
@@ -150,9 +151,8 @@ export class Rule extends Lint.Rules.OptionallyTypedRule {
         if (options.matchDeclarationOrder && options.matchDeclarationOrderOnly) {
             showWarningOnce(
                 `"${OPTION_MATCH_DECLARATION_ORDER}" will be ignored since ` +
-                    `"${OPTION_MATCH_DECLARATION_ORDER_ONLY}" has been enabled for ${
-                        this.ruleName
-                    }.`,
+                `"${OPTION_MATCH_DECLARATION_ORDER_ONLY}" has been enabled for ${this.ruleName
+                }.`,
             );
             return [];
         }
@@ -206,18 +206,65 @@ function walk(ctx: Lint.WalkContext<Options>, checker?: ts.TypeChecker): void {
             const type = getContextualType(node, checker!);
             // If type has an index signature, we can't check ordering.
             // If type has call/construct signatures, it can't be satisfied by an object literal anyway.
-            if (
-                type !== undefined &&
-                type.members.every(
+            if (type !== undefined) {
+                const members = type.members as ReadonlyArray<{ kind: ts.SyntaxKind, name: ts.PropertyName }>;
+                const typeName = getDeclarationName(type);
+                const groups = [{
+                    name: getDeclarationName(type),
+                    props: members
+                }];
+                const knownPropNames = new Map<string, string | undefined>(
+                    members
+                        .filter(m => m.name.kind !== ts.SyntaxKind.ComputedPropertyName)
+                        .map(m => [(m.name as ts.Identifier).text, typeName])
+                );
+                const contexualType = checker!.getContextualType(node)!;
+                if (isInterfaceType(contexualType)) {
+                    const baseTypes = checker!.getBaseTypes(contexualType);
+
+                    for (const baseType of baseTypes) {
+                        const properties = baseType.getProperties();
+                        const baseTypeName = getTypeName(baseType);
+                        const ms: Array<{ kind: ts.SyntaxKind, name: ts.PropertyName }> = []
+                        for (const { declarations } of properties) {
+                            if (declarations === undefined || declarations.length !== 1) {
+                                continue;
+                            }
+
+                            const declaration = declarations[0];
+                            if (!ts.isTypeElement(declaration)) {
+                                continue;
+                            }
+
+                            const name = declaration.name;
+                            if (!name || name.kind === ts.SyntaxKind.ComputedPropertyName) {
+                                continue;
+                            }
+                            if (!knownPropNames.has(name.text)) {
+                                ms.push({
+                                    kind: declaration.kind,
+                                    name: declaration.name!
+                                });
+                                knownPropNames.set(name.text, baseTypeName);
+                            }
+                        }
+                        if (ms.length) {
+                            groups.push({
+                                name: baseTypeName,
+                                props: ms
+                            });
+                        }
+                    }
+                }
+                if (groups.every(g => g.props.every(
                     m =>
                         m.kind === ts.SyntaxKind.PropertySignature ||
                         m.kind === ts.SyntaxKind.MethodSignature,
-                )
-            ) {
-                checkMatchesDeclarationOrder(node, type, type.members as ReadonlyArray<
-                    ts.PropertySignature | ts.MethodSignature
-                >);
-                return;
+                ))
+                ) {
+                    checkMatchesDeclarationOrder(node, groups, knownPropNames);
+                    return;
+                }
             }
         }
         if (!matchDeclarationOrderOnly) {
@@ -272,8 +319,8 @@ function walk(ctx: Lint.WalkContext<Options>, checker?: ts.TypeChecker): void {
                             lastKey === undefined
                                 ? false
                                 : localeCompare
-                                ? lastKey.localeCompare(key) === 1
-                                : lastKey > key;
+                                    ? lastKey.localeCompare(key) === 1
+                                    : lastKey > key;
 
                         if (keyOrderDescending && ignoreBlankLines) {
                             ctx.addFailureAtNode(
@@ -297,41 +344,73 @@ function walk(ctx: Lint.WalkContext<Options>, checker?: ts.TypeChecker): void {
 
     function checkMatchesDeclarationOrder(
         { properties }: ts.ObjectLiteralExpression,
-        type: TypeLike,
-        members: ReadonlyArray<{ name: ts.PropertyName }>,
+        groups: ReadonlyArray<{
+            name: string | undefined
+            props: ReadonlyArray<{ name: ts.PropertyName }>
+        }>,
+        knownPropNames: Map<string, string | undefined>
     ): void {
-        let memberIndex = 0;
-        outer: for (const prop of properties) {
-            if (prop.kind === ts.SyntaxKind.SpreadAssignment) {
-                memberIndex = 0;
-                continue;
-            }
-
-            if (prop.name.kind === ts.SyntaxKind.ComputedPropertyName) {
-                continue;
-            }
-
-            const propName = prop.name.text;
-
-            for (; memberIndex !== members.length; memberIndex++) {
-                const { name: memberName } = members[memberIndex];
-                if (
-                    memberName.kind !== ts.SyntaxKind.ComputedPropertyName &&
-                    propName === memberName.text
-                ) {
-                    continue outer;
+        function check(members: ReadonlyArray<{ name: ts.PropertyName }>) {
+            let memberIndex = 0;
+            outer: for (const prop of properties) {
+                if (prop.kind === ts.SyntaxKind.SpreadAssignment) {
+                    memberIndex = 0;
+                    continue;
                 }
+
+                if (prop.name.kind === ts.SyntaxKind.ComputedPropertyName) {
+                    continue;
+                }
+
+                const propName = prop.name.text;
+                if (!knownPropNames.has(propName)) {
+                    // ignore unknown props (from unions or intersections)
+                    continue;
+                }
+
+                for (; memberIndex !== members.length; memberIndex++) {
+                    const { name: memberName } = members[memberIndex];
+                    if (
+                        memberName.kind !== ts.SyntaxKind.ComputedPropertyName &&
+                        propName === (memberName && memberName.text)
+                    ) {
+                        continue outer;
+                    }
+                }
+
+                // This We didn't find the member we were looking for past the previous member,
+                // so it must have come before it and is therefore out of order.
+                return {
+                    name: prop.name,
+                    propName: prop.name.text
+                };
             }
 
-            // This We didn't find the member we were looking for past the previous member,
-            // so it must have come before it and is therefore out of order.
-            ctx.addFailureAtNode(
-                prop.name,
-                Rule.FAILURE_STRING_USE_DECLARATION_ORDER(propName, getTypeName(type)),
-            );
-            // Don't bother with multiple errors.
-            break;
+            return false;
         }
+
+        let fail = check(groups.reduceRight( // from base to derived
+            (members, group) => members.concat(group.props),
+            [] as Array<{ name: ts.PropertyName }>
+        ));
+
+        if (!fail) {
+            return;
+        }
+
+        fail = check(groups.reduce( // from derived to base
+            (members, group) => members.concat(group.props),
+            [] as Array<{ name: ts.PropertyName }>
+        ));
+
+        if (!fail) {
+            return;
+        }
+
+        ctx.addFailureAtNode(
+            fail.name,
+            Rule.FAILURE_STRING_USE_DECLARATION_ORDER(fail.propName, knownPropNames.get(fail.propName)),
+        );
     }
 }
 
@@ -365,13 +444,23 @@ function hasDoubleNewLine(sourceFile: ts.SourceFile, position: number) {
     return /(\r?\n){2}/.test(sourceFile.text.slice(position, position + 4));
 }
 
-function getTypeName(t: TypeLike): string | undefined {
+function getDeclarationName(t: ts.Node): string | undefined {
     const parent = t.parent;
-    return t.kind === ts.SyntaxKind.InterfaceDeclaration
+    return isInterfaceDeclaration(t)
         ? t.name.text
         : isTypeAliasDeclaration(parent)
-        ? parent.name.text
-        : undefined;
+            ? parent.name.text
+            : undefined;
+}
+
+function getTypeName(t: ts.Type): string | undefined {
+    const symbol = t.symbol;
+    const declarations = symbol.declarations;
+    if (declarations && declarations.length === 1) {
+        const declaration = declarations[0];
+        return getDeclarationName(declaration);
+    }
+    return undefined;
 }
 
 type TypeLike = ts.InterfaceDeclaration | ts.TypeLiteralNode;
