@@ -215,7 +215,7 @@ function walk(ctx: Lint.WalkContext<Options>, checker?: ts.TypeChecker): void {
                 }];
                 const knownPropNames = new Map<string, string | undefined>(
                     members
-                        .filter(m => m.name.kind !== ts.SyntaxKind.ComputedPropertyName)
+                        .filter(m => m.name && m.name.kind !== ts.SyntaxKind.ComputedPropertyName)
                         .map(m => [(m.name as ts.Identifier).text, typeName])
                 );
                 const contexualType = checker!.getContextualType(node)!;
