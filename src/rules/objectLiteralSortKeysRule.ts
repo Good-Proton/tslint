@@ -454,13 +454,18 @@ function getDeclarationName(t: ts.Node): string | undefined {
 }
 
 function getTypeName(t: ts.Type): string | undefined {
-    const symbol = t.symbol;
-    const declarations = symbol.declarations;
-    if (declarations && declarations.length === 1) {
-        const declaration = declarations[0];
-        return getDeclarationName(declaration);
+    const symbol = t.symbol || t.aliasSymbol;
+    if (!symbol) {
+        return undefined;
     }
-    return undefined;
+
+    const declarations = symbol.declarations;
+    if (!declarations || declarations.length !== 1) {
+        return undefined;
+    }
+    
+    const declaration = declarations[0];
+    return getDeclarationName(declaration);
 }
 
 type TypeLike = ts.InterfaceDeclaration | ts.TypeLiteralNode;
