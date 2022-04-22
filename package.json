@@ -1,6 +1,6 @@
 {
     "name": "@linked-helper/tslint",
-    "version": "6.3.0",
+    "version": "6.3.2",
     "description": "An extensible static analysis linter for the TypeScript language",
     "bin": {
         "tslint": "./bin/tslint"
